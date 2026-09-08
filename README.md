@@ -575,6 +575,63 @@ through the actual rendered UI; and the chart height math is worked out
 from each chart's actual data range, not guessed. If anything still
 looks off on your actual phone, that's the next thing to check.
 
+### Update: real feedback from the deployed site, six more fixes
+
+After actually using the deployed version on a phone: the sidebar
+levels weren't touch-friendly, three of the five levels turned out to
+have no usable stats, the player search box kept auto-filling a name
+that had to be deleted every time, the page nav wasn't easy to spot,
+the sidebar buried the player picker below other controls, the Batted
+Ball tab's chart was squeezed to one side, and "Percentile Rankings"
+showed up twice. All fixed:
+
+- **Levels reduced to MLB and AAA only.** AA/High-A/A were removed from
+  `data_layer.LEVELS` entirely, based on the report that they returned
+  no usable stats against the live deployment — trusted as real signal
+  from an actual run against `statsapi.mlb.com`, which this build
+  environment can't reach itself. `CACHE_VERSION` bumped so a
+  previously-cached roster including those levels doesn't linger.
+- **Levels and Team-page Level selector are now `st.pills`** (multi-
+  select on Batter/Pitcher, single-select-required on Team) instead of
+  checkboxes/a dropdown — the same tap-to-toggle pattern already used
+  for pitch types.
+- **No more autofilled player/team name.** Every search box (Batter,
+  Pitcher, Team) now starts empty (`index=None` + placeholder text)
+  instead of defaulting to the first option in the list. Verified
+  directly: the widget's value is `None` on load and the Load button
+  stays disabled until something is actually picked.
+- **Sidebar reordered.** "Refresh player list" and "Force refresh" moved
+  into a collapsed "Advanced" expander below the Load button, so the
+  primary flow — Season → Levels → Player → Load — is short and the
+  player picker isn't buried under maintenance controls.
+- **Page nav made obvious.** The Batter/Pitcher/Team Dashboard sidebar
+  links are now bigger, bolder, and clearly highlight whichever page is
+  active, using `stSidebarNav`/`stSidebarNavLink`/`aria-current="page"`
+  — confirmed as real strings in this Streamlit version's compiled
+  frontend before relying on them, not guessed. Also trimmed the padding
+  above the nav block, which was most of the reported "dead space."
+- **Batted Ball tab squish — an actual bug in the mobile CSS from last
+  round.** The `:has()` rule that wraps metric-tile rows checks for a
+  metric *anywhere* in a row's descendants, not just direct children —
+  so it also incorrectly matched the Batted Ball tab's chart-next-to-a-
+  metrics-column layout (the metrics are nested one level deeper inside
+  the second column, not siblings of the chart), squeezing the chart
+  down to ~31% width instead of stacking it full-width. Fixed with a
+  more specific rule that detects Plotly charts specifically and always
+  wins that tie — verified both that the fix exists and that it's
+  correctly ordered *after* the metric rule in the stylesheet, since
+  that ordering is what makes the tie-break work (`test_mobile_css.py`).
+- **Duplicate "Percentile Rankings"** — the chart itself carried its own
+  Plotly title, on top of every page's own section header above it.
+  Removed the chart's internal title (`charts.percentile_bars`), and
+  taught the shared chart-layout helper to reclaim the wasted top
+  margin when a chart has no title instead of leaving a blank gap. The
+  Team Dashboard didn't have its own section header at all — it was
+  relying entirely on the now-removed chart title — so it got one added
+  for both the hitting and pitching percentile sections. Verified:
+  exactly one "Percentile Rankings" heading renders per section, and
+  `test_smoke.py` now asserts the chart never carries an internal title.
+
 ## Deploying it (so you can use it from your phone)
 
 Running `streamlit run app.py` only starts a local web server — your
@@ -626,6 +683,169 @@ Railway, Fly.io, a small VPS) can run this too, but need more manual
 setup — a start command or Dockerfile, not just point-and-deploy. Given
 this is a personal tool with no auth requirements, Community Cloud is
 the least amount of new work for the result you're after.
+
+## Update: fixes from the actual live deployment
+
+Two things reported directly against the deployed site (not something
+this build environment could have caught on its own, since it has no
+internet access to either of these endpoints):
+
+**Baseball Savant's CSV export started returning the plain HTML
+leaderboard page instead of CSV data**, breaking Statcast percentiles
+(Hard-Hit%, Chase%, Whiff%, etc — the standard-stat percentiles like
+AVG/OBP/SLG were unaffected, since those come from a different, MLB
+Stats API endpoint that kept working). The request already had a
+realistic User-Agent/Accept/Referer before this, so simple header
+spoofing wasn't the fix. See the update below for how this played out —
+the first attempted fix here made things worse, not better.
+
+**Sidebar order.** All three pages now render Player/Team search first,
+*then* Season, *then* Levels, then the Load button, with "Force
+refresh"/"Refresh player list" tucked into the "Advanced" expander at
+the very bottom — matching the requested order exactly (the page
+navigation itself, i.e. Batter/Pitcher/Team Dashboard, is Streamlit's
+native top-of-sidebar element and was already first).
+
+The tricky part: the search box's own options depend on Season/Levels,
+which now render *below* it. This works by reading each filter's
+current value out of `st.session_state` before its own widget runs
+later in the same script — Streamlit persists a widget's value across
+reruns under its key, so this reflects whatever was last picked, and
+correctly cascades to the search box above it the next time anything
+changes. Verified two ways, not just that it renders without error:
+the elements actually appear in the requested order, and changing a
+filter (Levels) actually narrows the search box's options on the next
+run (`test_sidebar_order.py`) — proving the cascade really works, not
+just that the fallback defaults happen to render once without a crash.
+
+### Update: the Savant fix made it worse, and the nav divider was too big
+
+Two more rounds of direct feedback against the live site.
+
+**Savant, continued.** The header-improvement fix above also added a
+"warm-up" request — a GET to the plain leaderboard page first, to pick
+up cookies, immediately followed by the real CSV request. A follow-up
+report said the error was still happening and started after "a recent
+change," which pointed straight at that warm-up step: firing two
+requests back to back within milliseconds is exactly the kind of timing
+pattern real bot-detection systems look for — no human loads a page and
+clicks "export" that fast — so it plausibly made things *worse*, not
+better. Reverted back to a single request, keeping the fuller header
+set (pure additive realism, no behavioral downside) but dropping the
+warm-up entirely. `test_savant_fetch.py` now specifically asserts
+exactly one request gets made per call, so that warm-up step can't
+silently creep back in without a test catching it.
+
+Still being direct: this isn't confirmed to fix it either. The
+IP-range-blocking possibility from the update above is still on the
+table and still not something any request/header change can rule out
+or fix from here. If it's still broken after this, the diagnostic in
+the error message (Content-Type header + first 300 chars of the actual
+response) is the real next data point — happy to keep working it with
+that in hand rather than another guess.
+
+**Sidebar nav spacing.** The accent-highlighted Batter/Pitcher/Team
+Dashboard links had a visible divider line and a fairly large margin
+below them, reported as taking up too much space for what it's doing.
+Removed the line entirely and cut the margin down to a fourth of what
+it was — still enough of a visual break from the search controls below
+it, just not its own dedicated chunk of the sidebar.
+
+### Update: found the actual Savant bug — wrong endpoint entirely
+
+A follow-up report with the exact same error, after two rounds of
+header/session changes that produced byte-for-byte identical responses,
+was the real signal: this was never a header or bot-detection problem.
+It was the URL itself.
+
+`get_savant_percentile_pool` had always used `/leaderboard/custom` —
+Baseball Savant's interactive leaderboard *builder* tool, the one you
+click through in a browser to assemble custom columns. Its `csv=true`
+parameter almost certainly never triggers a server-side CSV response at
+all; that tool's export is more likely generated entirely client-side
+by JavaScript from data already loaded on the page. No header, cookie,
+or session change could ever have fixed a request to the wrong URL.
+
+Found the actual correct endpoint by checking **pybaseball's real, public
+source code** — a widely-used, actively-maintained Python library whose
+own batted-ball leaderboard functions depend on a completely different,
+verified-working URL: `/leaderboard/statcast?type=batter&year={year}
+&position=&team=&min=q&csv=true`. Switched to that. Along the way, also
+found independent confirmation — a separate actively-maintained
+package's own "Known Issues" documentation — that Baseball Savant's
+*plate-discipline* leaderboard (the one Chase%/Whiff% would come from)
+has a real, currently-acknowledged outage on Savant's own end, returning
+CSV headers with no data rows. That's not something any fix on this end
+can work around.
+
+So the fix lands in two parts:
+- **Hard-Hit%, Avg Exit Velo, Sweet-Spot%** — now sourced from the
+  verified `/leaderboard/statcast` endpoint. The exact column names it
+  returns still aren't independently verified from this build
+  environment, so `SAVANT_METRICS` hedges by mapping two plausible
+  naming conventions (Savant's long-established classic names, and the
+  newer names this app was previously guessing) to the same internal
+  targets — whichever one is actually in use gets picked up without
+  needing to know in advance which it is. If somehow neither matches,
+  `_process_savant_csv` raises a clear error showing the actual column
+  names received, so a next round has real data instead of another guess.
+- **Chase%/Whiff%** — no longer expected from Savant at all, since
+  there's no verified-working source for that specific league-wide
+  comparison right now. Each player's *own* Chase%/Whiff% values still
+  show correctly (those were always computed locally from pitch-level
+  data, never from Savant) — they just won't have a league percentile to
+  compare against for now. A caption under the percentile chart explains
+  why, on MLB pages specifically, rather than leaving two silently blank
+  bars that look like another bug.
+
+Tested thoroughly against simulated responses rather than just asserted
+correct: the URL construction for both batter and pitcher, both plausible
+column-naming conventions independently, the duplicate-column edge case
+that mapping two names to one target can create if a response somehow
+contains both, the "still returns HTML" and "neither naming convention
+matches" error paths, and the full percentile table end-to-end (real
+percentiles for the three available metrics, graceful no-percentile
+handling for the two that aren't) — all in `test_savant_fetch.py`.
+
+### Update: garbled binary instead of HTML — a different bug, this app's own
+
+A follow-up report after the endpoint fix above showed real progress —
+**Content-Type now correctly said `text/csv`**, confirming Savant was
+genuinely trying to send CSV data — but the response body itself was
+garbled, mostly-unprintable binary rather than text.
+
+Cause: one of the earlier "more realistic headers" rounds had added
+`"br"` (Brotli) to the Accept-Encoding header, to look more like real
+browser traffic. That backfired specifically — advertising Brotli
+support tells a server it's free to compress the response that way, but
+`requests` can only automatically decompress Brotli if the optional
+`brotli`/`brotlicffi` package is installed, which it isn't in this
+environment (checked directly: `import brotli` fails here, and almost
+certainly fails the same way on a default Streamlit Community Cloud
+environment, since it's not a common default dependency). Without that
+package, the raw compressed bytes come through as if they were the
+final content, and reading them as UTF-8 text produces exactly this
+kind of garbage.
+
+Fixed by dropping `"br"` from Accept-Encoding — back to `"gzip, deflate"`,
+which is confirmed directly to be `requests`' own actual default when
+this header isn't set manually at all, so this isn't a guess about what's
+safe, it's what the library already does on its own. Also added a
+specific check for this exact failure shape (a response that's mostly
+unprintable characters) to the error message itself, so if anything
+similar ever happens again — a different compression mismatch, or
+anything else that produces garbled binary instead of text — the error
+names the likely cause directly instead of the generic "blocking
+automated requests" message, which doesn't point anywhere useful for
+this particular kind of failure.
+
+Verified directly rather than assumed: confirmed brotli isn't installed
+in this environment, confirmed `requests`' own real default Accept-
+Encoding value, and reproduced the exact garbled-binary shape from the
+report to confirm the new diagnostic correctly identifies it — while
+confirming a normal good CSV response and the original plain-HTML
+failure mode are both unaffected (no false positives from the new
+check) — all in `test_savant_fetch.py`.
 
 ## Known limitations / heads-up
 
@@ -746,6 +966,8 @@ test_compare_mode.py            Regression tests for the compare-mode toggle and
 test_pitcher_starts.py          Regression tests for Last-N-Starts detection and period-scoped official pitching stats
 test_team_period.py             Regression test proving Team Dashboard tiles (Runs/Game etc) respond to the period selector
 test_mobile_css.py              Regression test for the mobile-responsive CSS (selectors, valid syntax)
+test_savant_fetch.py            Regression test for the Savant CSV fetch (session/headers, error handling)
+test_sidebar_order.py           Regression test for the sidebar element order and its session-state cascading
 cache/                          Disk cache (rosters, pitch logs, leaderboards) — safe to delete anytime
 ```
 

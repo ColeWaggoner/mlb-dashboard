@@ -189,6 +189,15 @@ for name, fig in figs.items():
     _ = fig.to_dict()
     print(f"chart '{name}' OK, {len(fig.data)} traces")
 
+# Regression: percentile_bars used to set its own "Percentile Rankings"
+# chart title, duplicating the theme.section_title("Percentile Rankings")
+# heading every page already puts above it. It should carry no title of
+# its own now — the page-level heading is the only one.
+_pct_fig_dict = figs["percentile_bars"].to_dict()
+_pct_title_text = _pct_fig_dict.get("layout", {}).get("title", {}).get("text", "")
+assert not _pct_title_text, f"percentile_bars should have no internal title, got {_pct_title_text!r}"
+print("percentile_bars: confirmed no internal chart title (avoids duplicating the page's section header)")
+
 # ── Edge cases: empty dataframe ──────────────────────────────────────────────
 empty = df.iloc[0:0]
 print("empty slash:", stats.compute_slash_line(empty))

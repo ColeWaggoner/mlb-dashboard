@@ -33,9 +33,6 @@ ACCENTS = {
 LEVEL_COLORS = {
     "MLB": "#2f9bb5",
     "AAA": "#9b7fd4",
-    "AA": "#c2447a",
-    "High-A": "#d4a24a",
-    "A": "#5a9169",
 }
 
 
@@ -108,6 +105,37 @@ def inject_theme(accent: str = "#2f9bb5") -> None:
         }}
         .stDataFrame {{ border-radius: 6px; overflow: hidden; }}
 
+        /* ── Sidebar page navigation (Batter/Pitcher/Team Dashboard links) ──
+           Streamlit renders these fairly small and plain by default, with
+           the same weight as everything else in the sidebar — not obviously
+           "the thing that switches pages." Bigger, bolder, with a clear
+           accent-colored left border on the current page. Also trims the
+           default vertical padding above/below the nav block itself, which
+           was most of the "dead space at the top of the sidebar."
+
+           No border-bottom / large margin below it anymore — that visible
+           dividing line plus the space around it was reported as taking
+           up too much room for what it's doing; a small margin is enough
+           of a visual break from the search controls below it. */
+        div[data-testid="stSidebarNav"] {{
+            padding-top: 0.25rem !important;
+            padding-bottom: 0.15rem !important;
+            margin-bottom: 0.2rem;
+        }}
+        div[data-testid="stSidebarNav"] a[data-testid="stSidebarNavLink"] {{
+            font-size: 16px !important;
+            font-weight: 600 !important;
+            padding: 10px 12px !important;
+            border-radius: 6px;
+            border-left: 3px solid transparent;
+        }}
+        div[data-testid="stSidebarNav"] a[data-testid="stSidebarNavLink"][aria-current="page"] {{
+            background-color: {accent}22 !important;
+            border-left: 3px solid {accent};
+            color: {TEXT_PRIMARY} !important;
+        }}
+        section[data-testid="stSidebar"] > div {{ padding-top: 0.5rem !important; }}
+
         /* ── Mobile (phone-width screens) ──────────────────────────────────
            Streamlit's st.columns() never reflows on its own — a 6-column
            stat-tile row or a 2-chart side-by-side row just gets squeezed
@@ -125,7 +153,18 @@ def inject_theme(accent: str = "#2f9bb5") -> None:
            tiles meant scrolling through 12 rows just to see the headline
            numbers. :has() needs a reasonably modern browser (Chrome/Edge
            105+, Safari 15.4+, Firefox 121+) — effectively any phone
-           browser that's auto-updated in the last couple of years. */
+           browser that's auto-updated in the last couple of years.
+
+           :has() checks for a stMetric ANYWHERE in the row's descendants,
+           not just as a direct child — which incorrectly also matched rows
+           like the Batted Ball tab's chart-next-to-a-metrics-column layout
+           (the metrics are nested inside the second column, not siblings
+           of the chart), squeezing the chart down to ~31% width instead of
+           stacking it full-width. The chart-detection rule below is more
+           specific and comes AFTER the metric rule in this stylesheet, so
+           it wins the tie for any row matching both (CSS resolves equal-
+           specificity !important conflicts by source order) — any row
+           with a chart in it always fully stacks, full stop. */
         @media (max-width: 640px) {{
             div[data-testid="stHorizontalBlock"] {{
                 flex-direction: column !important;
@@ -148,6 +187,20 @@ def inject_theme(accent: str = "#2f9bb5") -> None:
             div[data-testid="stMetric"] {{ padding: 4px 6px 8px 2px !important; }}
             div[data-testid="stMetricValue"] {{ font-size: 1.25rem !important; }}
             div[data-testid="stMetricLabel"] p {{ font-size: 10px !important; }}
+
+            /* Wins the tie over the metric-wrap rule above for any row
+               that has both (e.g. a chart next to a column that itself
+               contains metrics nested inside it) — see the comment above
+               this whole mobile block for why this needs to come second. */
+            div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPlotlyChart"]) {{
+                flex-direction: column !important;
+                flex-wrap: nowrap !important;
+            }}
+            div[data-testid="stHorizontalBlock"]:has(div[data-testid="stPlotlyChart"]) > div[data-testid="stColumn"] {{
+                width: 100% !important;
+                min-width: 100% !important;
+                flex: 1 1 100% !important;
+            }}
 
             /* Only reclaim the side margins here — Streamlit's own
                top padding on .block-container is sized to clear its

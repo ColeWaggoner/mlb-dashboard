@@ -56,10 +56,15 @@ def fmt_rate(x, allow_negative=False, decimals=3):
 with st.sidebar:
     st.subheader("Team Search")
 
-    season = st.number_input("Season", min_value=2015, max_value=CURRENT_YEAR, value=CURRENT_YEAR, step=1, key="t_season")
-
+    # Team search renders first (per request), but the list of available
+    # teams depends on season/level — which render further down. Read
+    # their CURRENT value from session_state before their own widgets run
+    # this pass (Streamlit persists widget values across reruns under
+    # their key); the fallback defaults here only matter on the very
+    # first-ever render, before either widget has been instantiated yet.
     level_names = list(data_layer.LEVELS.values())
-    picked_level = st.selectbox("Level", level_names, index=0, key="t_level")
+    season = st.session_state.get("t_season", CURRENT_YEAR)
+    picked_level = st.session_state.get("t_level", level_names[0])
     sport_id = [sid for sid, name in data_layer.LEVELS.items() if name == picked_level][0]
 
     with st.spinner("Loading team list…"):
@@ -72,11 +77,19 @@ with st.sidebar:
         selected_team = None
     else:
         team_names = teams["name"].tolist()
-        selected_team = st.selectbox("Team", team_names, key="t_team")
+        selected_team = st.selectbox("Team", team_names, index=None, placeholder="Search for a team…", key="t_team")
 
-    force_refresh = st.checkbox("Force refresh league data", value=False, key="t_refresh")
+    season = st.number_input("Season", min_value=2015, max_value=CURRENT_YEAR, value=CURRENT_YEAR, step=1, key="t_season")
+
+    picked_level = st.pills(
+        "Level", level_names, selection_mode="single", default=level_names[0], required=True, key="t_level"
+    )
+
     load_clicked = st.button("Load team", type="primary", disabled=selected_team is None,
                               key="t_load", width="stretch")
+
+    with st.expander("Advanced"):
+        force_refresh = st.checkbox("Force refresh league data", value=False, key="t_refresh")
 
 # ── Load on click ─────────────────────────────────────────────────────────────
 if load_clicked and selected_team is not None:
@@ -229,6 +242,7 @@ h9.metric("Games", team_hit_row.get("games_played", "—"))
 hit_pct_table = stats_team.build_team_percentile_table(
     team_hit_row, hitting_pool, stats_team.TEAM_HITTING_PERCENTILE_METRICS
 )
+theme.section_title("Percentile Rankings", ACCENT)
 st.plotly_chart(charts.percentile_bars(hit_pct_table), width="stretch")
 
 if is_mlb:
@@ -292,6 +306,7 @@ p8.metric("BB%", f"{team_pitch_row.get('bb_pct', np.nan)*100:.1f}%" if team_pitc
 pitch_pct_table = stats_team.build_team_percentile_table(
     team_pitch_row, pitching_pool, stats_team.TEAM_PITCHING_PERCENTILE_METRICS
 )
+theme.section_title("Percentile Rankings", ACCENT)
 st.plotly_chart(charts.percentile_bars(pitch_pct_table), width="stretch")
 
 if is_mlb:

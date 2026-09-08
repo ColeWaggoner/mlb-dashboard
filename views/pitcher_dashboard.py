@@ -50,18 +50,17 @@ def fmt_rate(x, allow_negative=False):
 with st.sidebar:
     st.subheader("Pitcher Search")
 
-    season = st.number_input("Season", min_value=2015, max_value=CURRENT_YEAR,
-                              value=CURRENT_YEAR, step=1, key="p_season")
-
+    # Player search renders first (per request), but the list of available
+    # pitchers depends on season/level/pitchers-only — which render further
+    # down. Read their CURRENT value from session_state before their own
+    # widgets run this pass (Streamlit persists widget values across
+    # reruns under their key); the fallback defaults here only matter on
+    # the very first-ever render, before any of those widgets exist yet.
     level_names = list(data_layer.LEVELS.values())
-    st.write("Levels")
-    lvl_cols = st.columns(2)
-    picked_levels = []
-    for i, lvl in enumerate(level_names):
-        with lvl_cols[i % 2]:
-            if st.checkbox(lvl, value=True, key=f"pit_level_{lvl}"):
-                picked_levels.append(lvl)
+    season = st.session_state.get("p_season", CURRENT_YEAR)
+    picked_levels = st.session_state.get("pit_level_pills", level_names)
     picked_sport_ids = [sid for sid, name in data_layer.LEVELS.items() if name in picked_levels]
+    pitchers_only = st.session_state.get("p_pitchers_only", True)
 
     with st.spinner("Loading player list…"):
         universe = data_layer.load_player_universe(season)
@@ -69,7 +68,6 @@ with st.sidebar:
     if not universe.empty and picked_sport_ids:
         universe = universe[universe["sport_id"].isin(picked_sport_ids)]
     # Pitchers only by default — two-way players (position "TWP") stay visible too.
-    pitchers_only = st.checkbox("Pitchers only (uncheck to search everyone)", value=True)
     if pitchers_only and not universe.empty and "position" in universe.columns:
         universe = universe[universe["position"].isin(["P", "TWP"])]
 
@@ -82,13 +80,25 @@ with st.sidebar:
         universe = universe.sort_values("name")
         options = universe.index.tolist()
         selected_idx = st.selectbox(
-            "Pitcher", options, format_func=lambda i: universe.loc[i, "display_name"], key="p_player"
+            "Pitcher", options, index=None, placeholder="Search for a pitcher…",
+            format_func=lambda i: universe.loc[i, "display_name"], key="p_player"
         )
-        selected_row = universe.loc[selected_idx]
+        selected_row = universe.loc[selected_idx] if selected_idx is not None else None
 
-    force_refresh = st.checkbox("Force refresh this pitcher's data", value=False, key="p_refresh")
+    season = st.number_input("Season", min_value=2015, max_value=CURRENT_YEAR,
+                              value=CURRENT_YEAR, step=1, key="p_season")
+
+    picked_levels = st.pills(
+        "Levels", level_names, selection_mode="multi", default=level_names, key="pit_level_pills"
+    ) or []
+
+    pitchers_only = st.checkbox("Pitchers only (uncheck to search everyone)", value=True, key="p_pitchers_only")
+
     load_clicked = st.button("Load pitcher", type="primary",
                               disabled=selected_row is None, key="p_load", width='stretch')
+
+    with st.expander("Advanced"):
+        force_refresh = st.checkbox("Force refresh this pitcher's data", value=False, key="p_refresh")
 
 # ── Load on click ─────────────────────────────────────────────────────────────
 if load_clicked and selected_row is not None:
@@ -147,7 +157,7 @@ if st.session_state.pitcher_df is None:
     theme.page_header("Pick a pitcher to get started", "", ACCENT)
     st.markdown(
         "Pick a pitcher in the sidebar and hit **Load pitcher**. Works for any MLB or "
-        "minor-league pitcher (AAA/AA/High-A/A) with tracked pitch-by-pitch data this season."
+        "minor-league pitcher (AAA) with tracked pitch-by-pitch data this season."
     )
     st.stop()
 
@@ -237,6 +247,13 @@ pct_table = stats_pitching.build_pitching_percentile_table(
     st.session_state.pitching_savant_pool, is_mlb, use_relief_pool=use_relief_pool,
 )
 st.plotly_chart(charts.percentile_bars(pct_table), width='stretch')
+if is_mlb:
+    st.caption("Whiff% (induced)/Chase% (induced) percentiles aren't available right now — they come from "
+               "Baseball Savant's \"Swing & Take\" leaderboard specifically, which is currently broken on "
+               "Savant's own end (independently confirmed via another actively-maintained tool that depends "
+               "on the same data). Their values above are still your own real numbers, computed directly "
+               "from this pitcher's pitch-level data — just without a league percentile to compare against "
+               "for now.")
 
 with st.expander("Data source status (debug info)"):
     st.download_button(

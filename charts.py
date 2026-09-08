@@ -20,15 +20,17 @@ ACCENT = "#2f9bb5"
 
 
 def _base_layout(fig: go.Figure, title: str, height: int = 420) -> go.Figure:
-    fig.update_layout(
-        title=dict(text=title, font=dict(color="white", size=16)),
+    layout_kwargs = dict(
         paper_bgcolor=BG,
         plot_bgcolor=BG,
         font=dict(color=MUTED),
         height=height,
-        margin=dict(l=40, r=20, t=50, b=40),
+        margin=dict(l=40, r=20, t=(50 if title else 15), b=40),
         legend=dict(bgcolor=PANEL, bordercolor=GRID, borderwidth=1, font=dict(color="white")),
     )
+    if title:
+        layout_kwargs["title"] = dict(text=title, font=dict(color="white", size=16))
+    fig.update_layout(**layout_kwargs)
     fig.update_xaxes(gridcolor=GRID, zerolinecolor=GRID, color=MUTED)
     fig.update_yaxes(gridcolor=GRID, zerolinecolor=GRID, color=MUTED)
     return fig
@@ -318,7 +320,9 @@ def percentile_bars(pct_df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
     plot_df = pct_df[pct_df["percentile"].notna()].copy()
     if plot_df.empty:
-        return _base_layout(fig, "Percentile Ranks — not enough league data yet", height=380)
+        fig.add_annotation(text="Not enough league data yet", showarrow=False,
+                            font=dict(color=MUTED, size=14), xref="paper", yref="paper", x=0.5, y=0.5)
+        return _base_layout(fig, "", height=380)
 
     # A vivid, continuous gradient instead of flat gray-centered buckets —
     # same blue-is-below-average / red-is-elite convention as before, but
@@ -356,7 +360,7 @@ def percentile_bars(pct_df: pd.DataFrame) -> go.Figure:
     ))
     fig.add_vline(x=50, line=dict(color="rgba(255,255,255,0.35)", dash="dash", width=1.5))
     fig.update_xaxes(title="Percentile vs qualified hitters", range=[0, 108])
-    return _base_layout(fig, "Percentile Rankings", height=max(340, 45 * len(plot_df)))
+    return _base_layout(fig, "", height=max(340, 45 * len(plot_df)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -56,7 +56,15 @@ for d in (ROSTER_CACHE, PITCH_CACHE, LEADERBOARD_CACHE):
 # yet (previously returned the full scheduled calendar for the whole
 # season) — a stale cached schedule from before this fix would still
 # include those future games under the same file name.
-CACHE_VERSION = 7
+# v8: dropped AA/High-A/A from LEVELS (no usable stats at those levels per
+# a user report against the live deployment) — a stale cached roster from
+# before this change would still list players at those levels.
+# v9: Savant leaderboard fetches switched from the broken /leaderboard/
+# custom endpoint (returned HTML, not CSV) to the verified-working
+# /leaderboard/statcast endpoint, with a different column mapping — a
+# stale cached Savant pool from before this fix would be either empty or
+# built from a previous, broken attempt.
+CACHE_VERSION = 9
 
 # Separate version counter for the per-player/pitcher/team pitch-level caches
 # (these never expire on a TTL — they're cached indefinitely, since a
@@ -80,9 +88,6 @@ PITCH_LOG_CACHE_VERSION = 5
 LEVELS = {
     1:  "MLB",
     11: "AAA",
-    12: "AA",
-    13: "High-A",
-    14: "A",
 }
 
 scraper = MLB_Scrape()
@@ -621,43 +626,39 @@ def get_pitcher_official_season_stats(player_id: int, season: int, sport_id: int
 PITCHING_SAVANT_METRICS = {
     "player_id": "player_id",
     "player_name": "name",
-    "p_era": "era",
-    "whiff_percent": "whiff_pct",
-    "oz_swing_percent": "chase_pct",
-    "z_swing_percent": "zone_swing_pct",
-    "hard_hit_percent": "hard_hit_pct_against",
+    # Two name variants mapped to each target: the classic leaderboard's
+    # long-established naming (avg_hit_speed, ev95percent,
+    # anglesweetspotpercent) and the newer/custom-tool naming this app
+    # originally guessed (exit_velocity_avg, hard_hit_percent,
+    # sweet_spot_percent). Only one is likely to actually be present in
+    # any given response; mapping both to the same target means whichever
+    # one Savant is actually using gets picked up without needing to know
+    # in advance which era of column names this endpoint uses.
+    "avg_hit_speed": "avg_ev_against",
     "exit_velocity_avg": "avg_ev_against",
-    "launch_angle_avg": "avg_la_against",
+    "ev95percent": "hard_hit_pct_against",
+    "hard_hit_percent": "hard_hit_pct_against",
+    "anglesweetspotpercent": "sweet_spot_pct_against",
     "sweet_spot_percent": "sweet_spot_pct_against",
-    "fastball_avg_speed": "avg_fastball_velo",
-    "k_percent": "k_pct_savant",
-    "bb_percent": "bb_pct_savant",
 }
 
-PITCHING_PERCENT_SCALE_COLUMNS = {
-    "whiff_pct", "chase_pct", "zone_swing_pct", "hard_hit_pct_against",
-    "sweet_spot_pct_against", "k_pct_savant", "bb_pct_savant",
-}
+PITCHING_PERCENT_SCALE_COLUMNS = {"hard_hit_pct_against", "sweet_spot_pct_against"}
 
 
 def get_pitching_savant_percentile_pool(season: int, force_refresh: bool = False) -> pd.DataFrame:
-    """Baseball Savant's custom-leaderboard CSV export for qualified MLB
-    pitchers (type=pitcher). Same MLB-only caveat as the batter version.
-    NOTE: pitcher-side field names on Savant's leaderboard weren't
-    verifiable from this build environment (no live network access) — if
-    the debug panel in the Pitcher Dashboard shows a column-mismatch error,
-    check the actual returned columns against PITCHING_SAVANT_METRICS above
-    and adjust the mapping."""
+    """Baseball Savant's classic Statcast batted-ball-against leaderboard
+    for qualified MLB pitchers (Hard-Hit%/Avg Exit Velo/Sweet-Spot% against
+    only — see the note on get_savant_percentile_pool for why Chase%/Whiff%
+    aren't sourced from here)."""
     cache_file = LEADERBOARD_CACHE / f"{season}_savant_pitching_v{CACHE_VERSION}.parquet"
     if cache_file.exists() and not force_refresh:
         age_hours = (time.time() - cache_file.stat().st_mtime) / 3600
         if age_hours < 6:
             return pd.read_parquet(cache_file)
 
-    selections = ",".join(k for k in PITCHING_SAVANT_METRICS if k not in ("player_id", "player_name"))
     url = (
-        "https://baseballsavant.mlb.com/leaderboard/custom"
-        f"?year={season}&type=pitcher&filter=&min=q&selections={selections}&csv=true"
+        "https://baseballsavant.mlb.com/leaderboard/statcast"
+        f"?type=pitcher&year={season}&position=&team=&min=q&csv=true"
     )
     raw = _fetch_savant_csv(url)
     df = _process_savant_csv(raw, PITCHING_SAVANT_METRICS, PITCHING_PERCENT_SCALE_COLUMNS)
@@ -670,32 +671,22 @@ def get_pitching_savant_percentile_pool(season: int, force_refresh: bool = False
 # ─────────────────────────────────────────────────────────────────────────────
 
 SAVANT_METRICS = {
-    "batting_avg": "avg",
-    "on_base_percent": "obp",
-    "slg_percent": "slg",
-    "on_base_plus_slg": "ops",
-    "b_k_percent": "k_pct_savant",
-    "b_bb_percent": "bb_pct_savant",
-    "exit_velocity_avg": "avg_ev",
-    "launch_angle_avg": "avg_la",
-    "sweet_spot_percent": "sweet_spot_pct",
-    "hard_hit_percent": "hard_hit_pct",
-    "z_swing_percent": "zone_swing_pct",
-    "oz_swing_percent": "chase_pct",
-    "whiff_percent": "whiff_pct",
     "player_id": "player_id",
     "player_name": "name",
+    # See the comment on PITCHING_SAVANT_METRICS above for why two name
+    # variants map to each target.
+    "avg_hit_speed": "avg_ev",
+    "exit_velocity_avg": "avg_ev",
+    "ev95percent": "hard_hit_pct",
+    "hard_hit_percent": "hard_hit_pct",
+    "anglesweetspotpercent": "sweet_spot_pct",
+    "sweet_spot_percent": "sweet_spot_pct",
 }
 
 # Columns that Savant expresses as 0-100 (literal percentages) rather than the
-# 0-1 fractions this app computes everywhere else. Anything named "*_pct"
-# below that isn't in this set is assumed to already be fraction-scale
-# (avg/obp/slg/ops follow the usual .275-style batting-stat convention even
-# though their Savant field names also end in "percent").
-PERCENT_SCALE_COLUMNS = {
-    "k_pct_savant", "bb_pct_savant", "sweet_spot_pct",
-    "hard_hit_pct", "zone_swing_pct", "chase_pct", "whiff_pct",
-}
+# 0-1 fractions this app computes everywhere else. Auto-detected anyway (see
+# _normalize_percent_scale) but listed here as the set that gets checked.
+PERCENT_SCALE_COLUMNS = {"hard_hit_pct", "sweet_spot_pct"}
 
 
 def _normalize_percent_scale(series: pd.Series) -> pd.Series:
@@ -714,7 +705,17 @@ def _process_savant_csv(raw: pd.DataFrame, metrics_map: dict = None, percent_col
     scale. Split out from get_savant_percentile_pool so it can be unit tested
     without a network call. Defaults to the batter mapping for backwards
     compatibility; pass PITCHING_SAVANT_METRICS/PITCHING_PERCENT_SCALE_COLUMNS
-    for the pitcher leaderboard."""
+    for the pitcher leaderboard.
+
+    metrics_map can map more than one source column name to the same
+    target (a hedge against not knowing in advance which naming
+    convention Savant's response is actually using — see SAVANT_METRICS).
+    That means metrics_map.values() itself can contain duplicates, and if
+    more than one of those source variants happens to be present in a
+    given response, raw.rename() produces genuine duplicate-named
+    columns. Both are de-duplicated here (keeping the first) so a lookup
+    like df["avg_ev"] always returns a Series, never a same-named-column
+    DataFrame that breaks _normalize_percent_scale."""
     metrics_map = metrics_map or SAVANT_METRICS
     percent_cols = percent_cols if percent_cols is not None else PERCENT_SCALE_COLUMNS
 
@@ -727,8 +728,9 @@ def _process_savant_csv(raw: pd.DataFrame, metrics_map: dict = None, percent_col
             "response format — check the metrics mapping in data_layer.py against that list."
         )
     df = raw.rename(columns=rename_map)
-    keep_cols = [v for v in metrics_map.values() if v in df.columns]
+    keep_cols = list(dict.fromkeys(v for v in metrics_map.values() if v in df.columns))
     df = df[keep_cols]
+    df = df.loc[:, ~df.columns.duplicated()]
     for col in percent_cols:
         if col in df.columns:
             df[col] = _normalize_percent_scale(df[col])
@@ -737,27 +739,106 @@ def _process_savant_csv(raw: pd.DataFrame, metrics_map: dict = None, percent_col
 
 def _fetch_savant_csv(url: str) -> pd.DataFrame:
     """Shared network call + sanity checks for any Baseball Savant custom
-    leaderboard export (batter or pitcher)."""
-    resp = requests.get(
-        url, timeout=30,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/csv,*/*",
-            "Referer": "https://baseballsavant.mlb.com/leaderboard/custom",
-        },
-    )
+    leaderboard export (batter or pitcher).
+
+    A user report against the live deployment: percentile rankings that
+    depend on this (Statcast metrics — Hard-Hit%, Chase%, Whiff%, etc.)
+    stopped showing up, and this endpoint started returning the plain
+    HTML leaderboard page instead of CSV data. The request already had a
+    realistic User-Agent/Accept/Referer before any of this, so simple
+    header spoofing wasn't the original fix either. Current header set is
+    fuller (Accept-Language, Accept-Encoding, sec-fetch-*, sec-ch-ua) in
+    case Savant's bot detection checks for a more complete fingerprint
+    than just User-Agent — pure additive realism, no behavioral downside.
+    An earlier attempt also added a "warm-up" request to the plain
+    leaderboard page first (to pick up cookies before the real request);
+    that's been reverted since a report that this exact error started
+    after a recent change points at it directly — firing two requests
+    back to back within milliseconds is exactly the kind of timing
+    pattern real bot detection looks for, so it plausibly made things
+    worse rather than better.
+
+    Being direct about what's still unverified: even with this reverted,
+    there's a real possibility Baseball Savant blocks by the requesting
+    SERVER'S IP RANGE rather than anything in the request itself —
+    Streamlit Community Cloud's IPs are a known, documented range, and
+    blocking cloud-hosting-provider traffic specifically (regardless of
+    headers) is a common defense against exactly this kind of scraping.
+    If that's what's happening, no header/request change fixes it from
+    here. The "first 300 chars" of the actual response in the error
+    message below is the next real data point if this still fails.
+    """
+    browser_headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        # NEVER add "br" (Brotli) here. A live-deployment report showed the
+        # response coming back as garbled binary once the URL fix below
+        # started actually getting a CSV response from Savant — advertising
+        # "br" support (this app's own prior addition) makes some servers
+        # respond with a Brotli-compressed body, and requests can only
+        # auto-decompress that if the optional brotli/brotlicffi package is
+        # installed, which it isn't in this environment (confirmed
+        # directly: `import brotli` fails here). Without it, the raw
+        # compressed bytes get returned as if they were the final content
+        # and .text mis-decodes them as UTF-8, producing exactly that kind
+        # of garbage. "gzip, deflate" is requests' own actual default when
+        # this header isn't set at all — same value, just made explicit so
+        # it's not accidentally re-widened later.
+        "Accept-Encoding": "gzip, deflate",
+        "Referer": "https://baseballsavant.mlb.com/leaderboard/statcast",
+        "sec-ch-ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Connection": "keep-alive",
+    }
+
+    # NOTE: an earlier version of this also made a "warm-up" request to the
+    # plain leaderboard page first, to pick up cookies before the real CSV
+    # request. Reverted — a user report that this exact error started
+    # after a recent change is the most likely explanation, and that
+    # warm-up step is the strongest candidate: two requests fired back to
+    # back within milliseconds is exactly the kind of timing pattern real
+    # bot detection looks for (no human loads a page and clicks "export"
+    # that fast), so it plausibly made things worse rather than better.
+    # Back to one request, keeping the fuller header set since that part
+    # is pure realism with no behavioral downside.
+    resp = requests.get(url, timeout=30, headers={**browser_headers, "Accept": "text/csv,*/*;q=0.8"})
     resp.raise_for_status()
 
     content_type = resp.headers.get("Content-Type", "")
+    content_encoding = resp.headers.get("Content-Encoding", "")
     stripped = resp.text.strip()
     first_line = stripped.splitlines()[0] if stripped else ""
     looks_like_html = first_line.lstrip().startswith("<")
     looks_like_csv = "," in first_line
+    # A response that's actually still-compressed binary (e.g. a
+    # Content-Encoding requests couldn't auto-decompress) decodes as UTF-8
+    # into mostly unprintable/control characters rather than real text —
+    # named explicitly in the error below rather than left to look like a
+    # generic parsing failure, since that's exactly what happened once
+    # here already (see the Accept-Encoding comment above).
+    if stripped:
+        unprintable_ratio = sum(1 for c in stripped[:300] if not c.isprintable() and c not in "\n\r\t") / min(len(stripped), 300)
+        looks_like_garbled_binary = unprintable_ratio > 0.15
+    else:
+        looks_like_garbled_binary = False
 
-    if not stripped or looks_like_html or not looks_like_csv:
+    if not stripped or looks_like_html or not looks_like_csv or looks_like_garbled_binary:
+        encoding_hint = (
+            f" Content-Encoding was {content_encoding!r} — if this looks like garbled binary "
+            "rather than HTML, that's likely a compressed response requests couldn't "
+            "auto-decompress (e.g. Brotli without the optional brotli package installed); "
+            "check the Accept-Encoding header this request sent rather than assuming it's HTML "
+            "or a blocked request." if looks_like_garbled_binary else ""
+        )
         raise RuntimeError(
             f"Baseball Savant returned something that doesn't look like CSV "
-            f"(Content-Type: {content_type or 'unknown'}). First 300 chars: "
+            f"(Content-Type: {content_type or 'unknown'}).{encoding_hint} First 300 chars: "
             f"{resp.text[:300]!r}. It may be blocking automated requests or the "
             "leaderboard URL format has changed."
         )
@@ -773,11 +854,45 @@ def _fetch_savant_csv(url: str) -> pd.DataFrame:
 
 def get_savant_percentile_pool(season: int, force_refresh: bool = False) -> pd.DataFrame:
     """
-    Baseball Savant's custom-leaderboard CSV export for qualified MLB batters —
-    one bulk request gets Statcast-quality metrics (Hard-Hit%, Avg EV, Chase%,
-    Whiff%, Sweet-Spot%) for the whole league, already restricted to qualified
-    hitters via min=q. This does NOT exist for minor-league levels; Statcast
-    percentile ranks are MLB-only in this dashboard for that reason.
+    Baseball Savant's classic Statcast batted-ball leaderboard for qualified
+    MLB batters (Hard-Hit%, Avg Exit Velo, Sweet-Spot%). This does NOT exist
+    for minor-league levels; Statcast percentile ranks are MLB-only in this
+    dashboard for that reason.
+
+    A live-deployment bug report showed this was returning the plain HTML
+    leaderboard page instead of CSV data, breaking every Statcast percentile
+    row. Root cause: this was using `/leaderboard/custom` — the interactive,
+    JavaScript-driven leaderboard BUILDER tool — with a `csv=true` parameter
+    that tool's server apparently doesn't act on (its CSV export may be
+    entirely client-side JS working from already-loaded page data, rather
+    than a server-side response to that URL parameter). No amount of header
+    tuning could have fixed that, since the URL itself wasn't the right one.
+
+    Switched to `/leaderboard/statcast` — a different, older, simpler
+    endpoint verified against pybaseball's actual source code (a real,
+    widely-used, actively-maintained library that depends on this exact URL
+    working: `leaderboard/statcast?type=batter&year={year}&position=&team=
+    &min={min}&csv=true`). This endpoint is specifically the classic
+    batted-ball-quality leaderboard, so it covers Hard-Hit%/Avg Exit Velo/
+    Sweet-Spot% but NOT Chase%/Whiff% (those live on Savant's separate
+    "Swing & Take" leaderboard) — independently confirmed elsewhere as
+    currently broken on Baseball Savant's own end (a different, actively-
+    maintained package's own "Known Issues" notes document that exact CSV
+    export returning headers with no data rows). Chase%/Whiff% percentile
+    ranks are consequently not available from Savant right now regardless
+    of what this app does; they just won't show a percentile (the same
+    graceful "value known, no percentile source" handling already used for
+    minor-league players, where Statcast percentiles were never available
+    at all — see build_percentile_table).
+
+    The exact column names this endpoint returns still aren't independently
+    verified from this build environment — SAVANT_METRICS maps two plausible
+    naming conventions (the classic leaderboard's long-established names,
+    and the newer names this app was previously guessing) to the same
+    targets, so whichever one is actually in use gets picked up. If NEITHER
+    matches, _process_savant_csv raises a clear error showing the actual
+    column names received, so a next attempt has real data instead of
+    another guess.
     """
     cache_file = LEADERBOARD_CACHE / f"{season}_savant_v{CACHE_VERSION}.parquet"
     if cache_file.exists() and not force_refresh:
@@ -785,10 +900,9 @@ def get_savant_percentile_pool(season: int, force_refresh: bool = False) -> pd.D
         if age_hours < 6:
             return pd.read_parquet(cache_file)
 
-    selections = ",".join(k for k in SAVANT_METRICS if k not in ("player_id", "player_name"))
     url = (
-        "https://baseballsavant.mlb.com/leaderboard/custom"
-        f"?year={season}&type=batter&filter=&min=q&selections={selections}&csv=true"
+        "https://baseballsavant.mlb.com/leaderboard/statcast"
+        f"?type=batter&year={season}&position=&team=&min=q&csv=true"
     )
     raw = _fetch_savant_csv(url)
     df = _process_savant_csv(raw, SAVANT_METRICS, PERCENT_SCALE_COLUMNS)

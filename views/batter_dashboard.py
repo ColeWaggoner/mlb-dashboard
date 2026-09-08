@@ -2,8 +2,8 @@
 Batter Dashboard view. Loaded via st.navigation from app.py — run the app
 with `streamlit run app.py`; this file is not run directly.
 
-Search any batter across MLB or the full-season affiliated minors (AAA/AA/
-High-A/A), see their slash line, Statcast-quality batted-ball
+Search any batter across MLB or the full-season affiliated minors (AAA),
+see their slash line, Statcast-quality batted-ball
 metrics, a pitch-type-filterable spray chart, plate discipline, and
 percentile ranks against qualified hitters at their level.
 """
@@ -56,22 +56,17 @@ def fmt_rate(x, allow_negative=False):
 with st.sidebar:
     st.subheader("Batter Search")
 
-    season = st.number_input("Season", min_value=2015, max_value=CURRENT_YEAR,
-                              value=CURRENT_YEAR, step=1)
-
+    # Player search renders first (per request), but the list of available
+    # players depends on season/level — which are rendered further down.
+    # Read their CURRENT value from session_state before their own widgets
+    # run this pass (Streamlit persists widget values across reruns under
+    # their key, so this reflects whatever was last picked); the fallback
+    # defaults here only matter on the very first-ever render, before
+    # either widget has been instantiated at all.
     level_names = list(data_layer.LEVELS.values())
-    st.write("Levels")
-    lvl_cols = st.columns(2)
-    picked_levels = []
-    for i, lvl in enumerate(level_names):
-        with lvl_cols[i % 2]:
-            if st.checkbox(lvl, value=True, key=f"bat_level_{lvl}"):
-                picked_levels.append(lvl)
+    season = st.session_state.get("bat_season", CURRENT_YEAR)
+    picked_levels = st.session_state.get("bat_level_pills", level_names)
     picked_sport_ids = [sid for sid, name in data_layer.LEVELS.items() if name in picked_levels]
-
-    if st.button("Refresh player list", width='stretch'):
-        with st.spinner("Pulling rosters…"):
-            data_layer.load_player_universe(season, force_refresh=True)
 
     with st.spinner("Loading player list…"):
         universe = data_layer.load_player_universe(season)
@@ -90,13 +85,27 @@ with st.sidebar:
         selected_idx = st.selectbox(
             "Player",
             options,
+            index=None,
+            placeholder="Search for a batter…",
             format_func=lambda i: universe.loc[i, "display_name"],
         )
-        selected_row = universe.loc[selected_idx]
+        selected_row = universe.loc[selected_idx] if selected_idx is not None else None
 
-    force_refresh = st.checkbox("Force refresh this player's data", value=False)
+    season = st.number_input("Season", min_value=2015, max_value=CURRENT_YEAR,
+                              value=CURRENT_YEAR, step=1, key="bat_season")
+
+    picked_levels = st.pills(
+        "Levels", level_names, selection_mode="multi", default=level_names, key="bat_level_pills"
+    ) or []
+
     load_clicked = st.button("Load batter", type="primary", width='stretch',
                               disabled=selected_row is None)
+
+    with st.expander("Advanced"):
+        force_refresh = st.checkbox("Force refresh this player's data", value=False)
+        if st.button("Refresh player list", width='stretch'):
+            with st.spinner("Pulling rosters…"):
+                data_layer.load_player_universe(season, force_refresh=True)
 
 # ── Load data on click ────────────────────────────────────────────────────────
 if load_clicked and selected_row is not None:
@@ -152,7 +161,7 @@ if st.session_state.player_df is None:
     theme.page_header("Pick a batter to get started", "", ACCENT)
     st.markdown(
         "Pick a player in the sidebar and hit **Load batter**. Works for any MLB or "
-        "minor-league hitter (AAA/AA/High-A/A) with tracked pitch-by-pitch data this season."
+        "minor-league hitter (AAA) with tracked pitch-by-pitch data this season."
     )
     st.stop()
 
@@ -248,9 +257,10 @@ if compare_mode == "Same-Period League" and not is_full_season:
         standard_pool_for_pct = st.session_state.standard_pool
     period_pool_note = (
         f"AVG/OBP/SLG/OPS/K%/BB% below compare against other qualified hitters' totals over "
-        f"{period_start} to {period_end} too. Hard-Hit%/Exit Velo/Chase%/Whiff%/Sweet-Spot% still "
+        f"{period_start} to {period_end} too. Hard-Hit%/Exit Velo/Sweet-Spot% still "
         f"compare against the full-season Baseball Savant pool — a same-period version of that "
-        f"leaderboard isn't available."
+        f"leaderboard isn't available. Chase%/Whiff% don't have a percentile comparison at all "
+        f"right now — see the note below the percentile chart."
     )
     # Directly checkable proof the toggle actually did something: if these
     # two pools have the same mean AVG, the date-scoped fetch isn't
@@ -274,6 +284,12 @@ pct_table = stats.build_percentile_table(
     combined_stats, standard_pool_for_pct, savant_pool_for_pct, is_mlb,
 )
 st.plotly_chart(charts.percentile_bars(pct_table), width='stretch')
+if is_mlb:
+    st.caption("Chase%/Whiff% percentiles aren't available right now — they come from Baseball Savant's "
+               "\"Swing & Take\" leaderboard specifically, which is currently broken on Savant's own end "
+               "(independently confirmed via another actively-maintained tool that depends on the same "
+               "data). Their values above are still your own real numbers, computed directly from this "
+               "player's pitch-level data — just without a league percentile to compare against for now.")
 if period_pool_note:
     st.caption(period_pool_note)
 
