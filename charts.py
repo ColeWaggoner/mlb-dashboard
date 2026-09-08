@@ -367,29 +367,46 @@ def percentile_bars(pct_df: pd.DataFrame) -> go.Figure:
 # Rolling trend
 # ─────────────────────────────────────────────────────────────────────────────
 
-def multi_rolling_trend_chart(trend_df: pd.DataFrame, stat_names: list, window: int) -> go.Figure:
+def multi_rolling_trend_chart(trend_df: pd.DataFrame, stat_names: list, window: int,
+                                format_map: dict = None) -> go.Figure:
     """Up to 3 stats plotted together over the same rolling PA window. All
     rate/percentage stats (AVG, K%, Whiff%, etc — everything except Avg
     Exit Velo) share one 0-1 axis, since they're all naturally fractions
     even though some are conventionally displayed as .XXX and others as a
     percentage; the hover text formats each trace correctly regardless of
-    what the shared axis ticks show. Avg Exit Velo is on a different scale
-    entirely (mph, not a fraction), so it gets its own secondary axis
-    whenever it's one of the selected stats.
+    what the shared axis ticks show. A "num1" stat (e.g. Avg Exit Velo) is
+    on a different scale entirely (mph, not a fraction), so it gets its
+    own secondary axis whenever it's one of the selected stats.
+
+    format_map: {stat_name: "rate3"|"pct"|"num1"}, e.g. stats.TREND_STAT_FORMAT
+    or stats_pitching.PITCHER_TREND_STAT_FORMAT. Defaults to
+    stats.TREND_STAT_FORMAT's categories under the original hardcoded
+    names if not given, so existing (Batter Dashboard) callers are
+    unaffected — this parameter exists so a caller with differently-named
+    stats (e.g. the Pitcher Dashboard's "AVG Against" instead of "AVG")
+    can supply the matching format for its own names instead of the
+    hover/axis logic silently defaulting to the wrong format for a name
+    it doesn't recognize.
     """
     fig = go.Figure()
     if trend_df is None or trend_df.empty or not stat_names:
         return _base_layout(fig, "Rolling Trend — not enough data yet", height=420)
 
+    if format_map is None:
+        format_map = {
+            "AVG": "rate3", "OBP": "rate3", "SLG": "rate3", "OPS": "rate3", "ISO": "rate3", "BABIP": "rate3",
+            "Avg Exit Velo": "num1",
+        }
+
     line_colors = [ACCENT, "#ff9f43", "#c2447a"]
-    rate3_stats = {"AVG", "OBP", "SLG", "OPS", "ISO", "BABIP"}
-    has_velo = "Avg Exit Velo" in stat_names
+    has_velo = any(format_map.get(n) == "num1" for n in stat_names)
 
     for i, name in enumerate(stat_names):
         if name not in trend_df.columns:
             continue
-        is_velo = name == "Avg Exit Velo"
-        hover_fmt = "%{y:.1f} mph" if is_velo else ("%{y:.3f}" if name in rate3_stats else "%{y:.1%}")
+        fmt = format_map.get(name, "pct")
+        is_velo = fmt == "num1"
+        hover_fmt = "%{y:.1f} mph" if is_velo else ("%{y:.3f}" if fmt == "rate3" else "%{y:.1%}")
         fig.add_trace(go.Scatter(
             x=trend_df["game_date"], y=trend_df[name], mode="lines", name=name,
             line=dict(color=line_colors[i % len(line_colors)], width=2.2),

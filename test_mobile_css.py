@@ -25,14 +25,14 @@ STREAMLIT_STATIC_DIR = "/usr/local/lib/python3.12/dist-packages/streamlit/static
 def test_column_testids_match_installed_streamlit_version():
     """Confirms every testid the CSS depends on ('stHorizontalBlock'/
     'stColumn' for the layout-stacking rules, 'stPlotlyChart' for the
-    chart-detection override, 'stSidebarNav'/'stSidebarNavLink' for the
-    nav-link styling) are actually real strings this installed Streamlit
-    version's compiled frontend uses, rather than assumed from general
-    knowledge. Checks every JS bundle, not just the main one — some
-    components (Plotly charts included) ship as separate lazy-loaded
-    chunks. Skips gracefully if the compiled frontend isn't found (e.g. a
-    different Streamlit install layout) rather than failing on an
-    environment difference unrelated to the CSS itself."""
+    chart-detection override, 'stTopNavLink' for the top-nav tab styling)
+    are actually real strings this installed Streamlit version's compiled
+    frontend uses, rather than assumed from general knowledge. Checks
+    every JS bundle, not just the main one — some components (Plotly
+    charts included) ship as separate lazy-loaded chunks. Skips gracefully
+    if the compiled frontend isn't found (e.g. a different Streamlit
+    install layout) rather than failing on an environment difference
+    unrelated to the CSS itself."""
     import glob
 
     bundles = glob.glob(f"{STREAMLIT_STATIC_DIR}/*.js")
@@ -42,7 +42,9 @@ def test_column_testids_match_installed_streamlit_version():
 
     required = {
         b"stHorizontalBlock": False, b"stColumn": False, b"stPlotlyChart": False,
-        b"stSidebarNav": False, b"stSidebarNavLink": False, b"stMetric": False,
+        b"stTopNavLink": False, b"stMetric": False,
+        b"stApp": False, b"stAppViewContainer": False, b"stMain": False, b"stHeader": False,
+        b"stStatusWidget": False,
     }
     for path in bundles:
         with open(path, "rb") as f:
@@ -106,16 +108,38 @@ def test_mobile_css_renders_correctly():
     assert chart_rule_idx > metric_rule_idx, \
         "chart-detection rule must come AFTER the metric rule to win the CSS tie-break"
 
-    # Sidebar nav links (Batter/Pitcher/Team Dashboard) should be styled
-    # more prominently, with a clear active-page indicator.
-    assert 'stSidebarNavLink' in css
+    # Top navigation (Batter/Pitcher/Team) — moved from the sidebar to
+    # position="top" and should be styled with a clear active-tab
+    # indicator. Confirmed directly that stTopNavLink uses the same
+    # aria-current="page" logic the old sidebar version did.
+    assert 'stTopNavLink' in css
     assert 'aria-current="page"' in css
+    assert 'a[data-testid="stSidebarNavLink"]' not in css, \
+        "sidebar-nav-specific styling should be gone now that nav lives at the top"
 
-    # Regression guard: the nav container originally had a border-bottom
-    # line plus a large margin below it, reported as taking up too much
-    # space. Should be gone now — just a small margin, no visible line.
-    nav_rule = css.split('div[data-testid="stSidebarNav"] {')[1].split("}")[0]
-    assert "border-bottom" not in nav_rule, "the removed dividing line under the nav shouldn't come back"
+    # Full-viewport background coverage: a user report that the themed
+    # background didn't fill the whole screen on mobile first-load, and a
+    # separate blank area in the sidebar, both trace to backgrounds only
+    # covering their own content height rather than the full viewport.
+    assert "100dvh" in css, "dynamic viewport height should be used for mobile background coverage"
+    assert 'section[data-testid="stSidebar"] > div' in css and "min-height" in css
+
+    # Charts hijacking scroll on touch devices: touch-action: pan-y lets
+    # vertical swipes pass through to normal page scroll while still
+    # allowing Plotly's own pan/zoom for other gesture types.
+    assert 'div[data-testid="stPlotlyChart"]' in css and "touch-action: pan-y" in css
+
+    # Loading indicator: Streamlit's cycling running-icon (a running-man
+    # figure, a New Year's icon, etc — reported as looking like a random
+    # sports-emoji cycle) should have its icon hidden. A separate custom
+    # "only show while running" bar was tried and reverted — it turned out
+    # to always be visible (stStatusWidget appears to stay present in the
+    # DOM regardless of run state), so this checks it's gone rather than
+    # present, to stop it from quietly coming back.
+    assert 'div[data-testid="stStatusWidget"] svg' in css and "display: none" in css
+    assert ':has(div[data-testid="stStatusWidget"])' not in css, \
+        "the reverted always-on-regardless-of-state loading bar shouldn't come back"
+    assert "mlbLoadingBar" not in css
 
     # Braces must balance -- an f-string escaping mistake ({{ vs {) would
     # silently produce broken CSS that a browser mostly ignores rather than
@@ -123,8 +147,10 @@ def test_mobile_css_renders_correctly():
     # "it didn't crash".
     assert css.count("{") == css.count("}"), "unbalanced braces in rendered CSS"
 
-    print("Mobile CSS renders with correct selectors, no header-covering padding-top,")
-    print("chart-override correctly ordered after metric rule, nav styling present, balanced braces")
+    print("Mobile CSS renders with correct selectors, no header-covering padding-top in the")
+    print("mobile media query, chart-override correctly ordered after metric rule, top-nav")
+    print("tab styling present, reverted loading-bar/header-height overrides confirmed absent,")
+    print("balanced braces")
 
 
 if __name__ == "__main__":

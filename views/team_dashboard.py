@@ -360,15 +360,22 @@ with dd_col1:
 
 if dd_load_clicked:
     status = st.empty()
+    bar = st.empty()
 
     def dd_progress(msg):
         status.info(msg)
+        bar.empty()
+
+    def dd_game_progress(completed, total):
+        status.info(f"Pulling pitch-by-pitch data — {completed} of {total} games…")
+        bar.progress(completed / total if total else 0)
 
     pitch_log = data_layer.get_team_pitch_log(
         team_id=meta["team_id"], team_name=meta["name"], season=int(season), sport_id=meta["sport_id"],
-        force_refresh=dd_force_refresh, progress_callback=dd_progress,
+        force_refresh=dd_force_refresh, progress_callback=dd_progress, game_progress_callback=dd_game_progress,
     )
     status.empty()
+    bar.empty()
     st.session_state.team_pitch_log = pitch_log
 
 pitch_log = st.session_state.team_pitch_log

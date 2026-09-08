@@ -111,9 +111,15 @@ with st.sidebar:
 if load_clicked and selected_row is not None:
     key = (selected_row["player_id"], season, selected_row["sport_id"])
     status = st.empty()
+    bar = st.empty()
 
     def progress(msg):
         status.info(msg)
+        bar.empty()
+
+    def game_progress(completed, total):
+        status.info(f"Pulling pitch-by-pitch data — {completed} of {total} games…")
+        bar.progress(completed / total if total else 0)
 
     df = data_layer.get_batter_pitch_log(
         player_id=int(selected_row["player_id"]),
@@ -122,8 +128,10 @@ if load_clicked and selected_row is not None:
         sport_id=int(selected_row["sport_id"]),
         force_refresh=force_refresh,
         progress_callback=progress,
+        game_progress_callback=game_progress,
     )
     status.empty()
+    bar.empty()
 
     if df.empty:
         st.warning(f"No plate-appearance data found for {selected_row['name']} in {season} "

@@ -847,6 +847,143 @@ confirming a normal good CSV response and the original plain-HTML
 failure mode are both unaffected (no false positives from the new
 check) — all in `test_savant_fetch.py`.
 
+## Update: more mobile polish, plus the pitcher Trends tab now matches the batter's
+
+Four more things reported after everything above was working cleanly.
+
+**Background didn't fill the screen on mobile, and a blank area above the
+player name / in the sidebar.** Both traced to the same root cause:
+`.stApp`'s background-color only covers its own content's height, not
+necessarily the full screen — on a phone, especially on first load
+before everything's rendered, or whenever the sidebar's (now more
+compact) content is shorter than the actual screen, that leaves a plain
+default-colored gap showing through, which reads as "unfinished" rather
+than intentional. Fixed by giving every layer that could show through —
+the root `html`/`body`, Streamlit's own app/view/main containers, the
+header bar, and the sidebar and its inner wrapper — an explicit
+background-color and a `min-height: 100dvh` (falling back to `100vh` for
+browsers that don't support dvh yet). `100dvh` specifically over `100vh`
+matters on mobile: regular `vh` doesn't reliably account for the
+browser's address bar showing and hiding, which is exactly the kind of
+thing that produces an inconsistent "sometimes there's a gap" bug.
+
+**Charts intercepting scroll swipes on mobile.** A real, acknowledged
+trade-off — Plotly's default touch handling treats a drag anywhere on a
+chart as a pan/zoom gesture, which can hijack an ordinary scroll swipe
+that happens to start or pass over one. Added `touch-action: pan-y` to
+every chart's container, which tells the browser itself — before any
+JavaScript runs — that vertical drags on that element should always be
+treated as normal page scrolling, leaving only horizontal drags and
+pinch gestures for Plotly to handle. Taps for hover/tooltips are
+unaffected either way, since a tap isn't a pan gesture. This is a
+standard, well-established fix for this exact class of problem, not a
+guess — though like the rest of the mobile work, it's not something this
+build environment can visually confirm on a real device.
+
+**Pitcher Dashboard's Trends tab now has the same stat picker as the
+Batter Dashboard's** — up to 3 stats at once instead of fixed baked-in
+options, but framed for a pitcher reading them ("AVG Against", "Whiff%
+Induced", "Chase% Induced" rather than "AVG"/"Whiff%"/"Chase%"). No
+duplicate computation logic: a pitcher's own pitch log has exactly the
+same shape as a batter's (it's the same underlying data, just filtered
+by pitcher_id instead of batter_id), so `compute_pitcher_multi_rolling_
+trend` is a thin wrapper around the exact same rolling engine
+(`stats.compute_multi_rolling_trend`) — it just translates the
+pitcher-framed labels to the base stat names that engine expects, calls
+it, and renames the result back. Verified this produces byte-identical
+values to calling the base engine directly (only the column names
+differ), and that the chart correctly formats the pitcher-framed labels
+by generalizing `multi_rolling_trend_chart` to accept an explicit format
+map instead of a hardcoded set of batter-specific names — the Batter
+Dashboard's existing calls are unaffected (confirmed backward-compatible
+directly) since they simply don't pass the new parameter.
+
+## Update: the header gap, finally solved properly, and a real loading indicator
+
+Two more rounds of the header-spacing issue had already happened by this
+point (once covering the title, once leaving too much space) — both were
+guesses at a padding-top value meant to match Streamlit's actual header
+height, which isn't exposed anywhere inspectable (no CSS custom property,
+no static class with a literal value — confirmed by searching the
+compiled frontend directly rather than assuming). Guessing at one side of
+a relationship where the other side is unknown and opaque was always
+going to be fragile.
+
+Fixed properly this time by controlling *both* sides directly instead of
+guessing at either: `[data-testid="stHeader"]`'s height is set explicitly
+to a known value, and `.block-container`'s padding-top is set to exactly
+that value plus a small, deliberate gap. Neither number is a guess at
+Streamlit's own default anymore — they're consistent by construction,
+so they can't drift out of sync with each other the way a blind guess at
+just one side could. A regression test checks this relationship
+structurally (padding-top must exceed the header height, and by no more
+than a small margin) rather than just checking for specific numbers, so
+a future edit to either value gets caught if it breaks the relationship
+between them.
+
+**The "sports emoji cycling" loading indicator** turned out to be a real,
+identifiable Streamlit feature, not a vague impression — searching the
+compiled frontend directly turned up `stStatusWidgetRunningManIcon`,
+`stStatusWidgetNewYearsIcon`, and others: Streamlit's built-in "Running"
+status indicator cycles through a handful of themed icons as a
+lighthearted touch. Hidden and replaced with a plain animated bar across
+the top of the viewport, shown only while that status widget is actually
+present (i.e. only during a real run) via `:has()` — the same technique
+already used elsewhere in this file for conditional styling.
+
+## Update: nav moved to the top, and a real progress bar for data pulls
+
+Three more things from a screenshot of the actual deployed site.
+
+**The persistent blank bar** turned out to be my own previous loading-bar
+fix (see the update above) not working as intended — it was designed to
+show only while `stStatusWidget` was present, but that element appears to
+stay in the DOM at all times regardless of run state (just empty when
+idle), so the bar was visible permanently rather than only during a load.
+Reverted that specific piece; see the third item below for how a real
+progress indicator was rebuilt properly this time.
+
+**Batter/Pitcher/Team moved from the sidebar to the top, as tabs.**
+Turns out `st.navigation()` has a native `position` parameter
+(`'sidebar'` / `'hidden'` / `'top'`) — this didn't need a bigger
+restructure, just using what Streamlit already supports. Page titles
+dropped "Dashboard" (now just "Batter"/"Pitcher"/"Team"), and the links
+are styled with an underline on the active tab rather than the sidebar
+version's left border, matching how horizontal tabs conventionally show
+"current." Confirmed directly against the installed Streamlit version's
+compiled frontend that the top-nav links use the exact same
+`aria-current="page"` active-state logic the sidebar version did, so
+that detection carried over unchanged.
+
+This also meant reverting the header-height/padding-top pairing from the
+update above — the nav now occupies that space instead of just the
+status icon, so a value tuned for the old layout doesn't apply to the
+new one, and this build environment has no way to measure the new
+combination. Reverted to Streamlit's own defaults for this layout rather
+than guess a fourth number for a moving target — `position="top"` is a
+standard, well-supported configuration Streamlit should size correctly
+on its own.
+
+**A real, incrementally-updating progress bar during data pulls — yes,
+this is possible, and now built.** The per-game progress previously only
+visible in a terminal comes from `tqdm` inside `MLB_Scrape.get_data`,
+which writes directly to stdout — structurally invisible to a web UI no
+matter what, since Streamlit never sees terminal output. Added a second,
+optional callback (`game_progress_callback(completed, total)`) fired
+once per game as it finishes downloading, threaded through
+`get_batter_pitch_log`/`get_pitcher_pitch_log`/`get_team_pitch_log`
+alongside the existing text-only callback — a strictly additive change,
+so no existing caller's behavior changes. The Batter, Pitcher, and Team
+Dashboards use it to drive a real `st.progress()` bar with "X of Y
+games" text while data loads, instead of only the occasional static
+status message from before. Verified the callback fires exactly once per
+game with the correct running total, that omitting it entirely still
+works exactly as before (an existing outdated test mock without the new
+parameter surfaced exactly this kind of gap — fixed both the mock and
+confirmed no other test had the same issue), and that the real page
+renders correctly through a full load with the progress bar active —
+all in `test_progress_bar.py`.
+
 ## Known limitations / heads-up
 
 - **This was built without live access to `statsapi.mlb.com` or
@@ -968,6 +1105,7 @@ test_team_period.py             Regression test proving Team Dashboard tiles (Ru
 test_mobile_css.py              Regression test for the mobile-responsive CSS (selectors, valid syntax)
 test_savant_fetch.py            Regression test for the Savant CSV fetch (session/headers, error handling)
 test_sidebar_order.py           Regression test for the sidebar element order and its session-state cascading
+test_progress_bar.py            Regression test for the real st.progress() bar during data pulls
 cache/                          Disk cache (rosters, pitch logs, leaderboards) — safe to delete anytime
 ```
 

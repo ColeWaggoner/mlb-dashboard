@@ -181,18 +181,25 @@ class MLB_Scrape:
         
         return data_total
 
-    def get_data(self, game_list_input: list):
+    def get_data(self, game_list_input: list, game_progress_callback=None):
         """
         Retrieves live game data for a list of game IDs in parallel.
         
         Parameters:
         - game_list_input (list): A list of game IDs for which to retrieve live data.
+        - game_progress_callback (callable, optional): called as
+          game_progress_callback(completed_count, total_count) after each
+          game finishes downloading, so a caller (e.g. a Streamlit page)
+          can drive a real, incrementally-updating progress bar instead of
+          only the tqdm output below, which renders to the terminal via
+          stdout and is never visible in a web UI.
         
         Returns:
         - data_total (list): A list of JSON responses containing live game data for each game ID.
         """
         data_total = []
         print('This May Take a While. Progress Bar shows Completion of Data Retrieval.')
+        total = len(game_list_input)
         
         def fetch_data(game_id):
             r = requests.get(f'https://statsapi.mlb.com/api/v1.1/game/{game_id}/feed/live')
@@ -200,8 +207,10 @@ class MLB_Scrape:
         
         with ThreadPoolExecutor() as executor:
             futures = {executor.submit(fetch_data, game_id): game_id for game_id in game_list_input}
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Processing", unit="iteration"):
+            for i, future in enumerate(tqdm(as_completed(futures), total=total, desc="Processing", unit="iteration")):
                 data_total.append(future.result())
+                if game_progress_callback:
+                    game_progress_callback(i + 1, total)
         
         return data_total
 

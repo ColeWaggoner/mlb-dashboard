@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from stats import HIT_EVENTS, NON_AB_EVENTS, WALK_EVENTS, is_non_pa_event, _bool, _safe_div  # reuse, not redefine
+from stats import compute_multi_rolling_trend  # noqa: E402 (reused generic rolling engine, see below)
 
 # For a pitcher, "whiff"/"chase" induced are GOOD outcomes — opposite framing
 # from the hitter's own version of the same fields. Kept in a dedicated table
@@ -65,6 +66,67 @@ def compute_pitch_velocity_summary(df: pd.DataFrame) -> pd.DataFrame:
             "avg_extension": grp["extension"].mean() if "extension" in grp.columns else np.nan,
         })
     return pd.DataFrame(rows).sort_values("n_pitches", ascending=False, ignore_index=True)
+
+
+# Every stat selectable in the Pitcher Dashboard's Trends tab. Mirrors
+# stats.TREND_STAT_OPTIONS/TREND_STAT_FORMAT — the underlying rolling
+# computation (stats.compute_multi_rolling_trend) is perspective-agnostic,
+# since a pitcher's own pitch log has exactly the same shape as a
+# batter's (it's the same underlying data, just filtered by pitcher_id
+# instead of batter_id) — a pitcher's "AVG" column IS opponents' batting
+# average against him. Only the LABELS differ here, framed for a pitcher
+# reading them ("AVG Against" rather than "AVG", "Whiff% Induced" rather
+# than "Whiff%") — see _PITCHER_TO_BASE_STAT_NAME for how a label here
+# maps back to the base stat name compute_multi_rolling_trend expects,
+# and compute_pitcher_multi_rolling_trend for the thin wrapper that
+# handles that translation both ways.
+PITCHER_TREND_STAT_OPTIONS = [
+    "AVG Against", "OBP Against", "SLG Against", "OPS Against", "ISO Against", "BABIP Against",
+    "K%", "BB%",
+    "Swing% Induced", "Zone%", "Z-Swing%", "Chase% Induced", "Contact% Allowed", "CSW%",
+    "Whiff% Induced", "Whiff% Induced (in zone)", "Whiff% Induced (out of zone)",
+    "Hard-Hit% Against", "Sweet-Spot% Against", "Avg Exit Velo Against",
+]
+
+PITCHER_TREND_STAT_FORMAT = {
+    "AVG Against": "rate3", "OBP Against": "rate3", "SLG Against": "rate3", "OPS Against": "rate3",
+    "ISO Against": "rate3", "BABIP Against": "rate3",
+    "K%": "pct", "BB%": "pct",
+    "Swing% Induced": "pct", "Zone%": "pct", "Z-Swing%": "pct", "Chase% Induced": "pct",
+    "Contact% Allowed": "pct", "CSW%": "pct",
+    "Whiff% Induced": "pct", "Whiff% Induced (in zone)": "pct", "Whiff% Induced (out of zone)": "pct",
+    "Hard-Hit% Against": "pct", "Sweet-Spot% Against": "pct",
+    "Avg Exit Velo Against": "num1",
+}
+
+_PITCHER_TO_BASE_STAT_NAME = {
+    "AVG Against": "AVG", "OBP Against": "OBP", "SLG Against": "SLG", "OPS Against": "OPS",
+    "ISO Against": "ISO", "BABIP Against": "BABIP",
+    "K%": "K%", "BB%": "BB%",
+    "Swing% Induced": "Swing%", "Zone%": "Zone%", "Z-Swing%": "Z-Swing%",
+    "Chase% Induced": "Chase%", "Contact% Allowed": "Contact%", "CSW%": "CSW%",
+    "Whiff% Induced": "Whiff%", "Whiff% Induced (in zone)": "Whiff% (in zone)",
+    "Whiff% Induced (out of zone)": "Whiff% (out of zone)",
+    "Hard-Hit% Against": "Hard-Hit%", "Sweet-Spot% Against": "Sweet-Spot%",
+    "Avg Exit Velo Against": "Avg Exit Velo",
+}
+
+
+def compute_pitcher_multi_rolling_trend(df: pd.DataFrame, window: int, stat_names: list) -> pd.DataFrame:
+    """Pitcher-framed wrapper around stats.compute_multi_rolling_trend —
+    translates PITCHER_TREND_STAT_OPTIONS labels (e.g. "AVG Against") to
+    the base stat names that generic engine expects (e.g. "AVG"), calls
+    it exactly as the Batter Dashboard does, then renames the result's
+    columns back to the pitcher-framed labels the caller asked for. No
+    duplicate computation logic — same engine, same cross-checked
+    correctness (see test_smoke.py's compute_multi_rolling_trend
+    cross-check), just relabeled for the pitcher's page."""
+    base_names = [_PITCHER_TO_BASE_STAT_NAME[n] for n in stat_names if n in _PITCHER_TO_BASE_STAT_NAME]
+    result = compute_multi_rolling_trend(df, window, base_names)
+    if result.empty:
+        return result
+    rename_map = {v: k for k, v in _PITCHER_TO_BASE_STAT_NAME.items() if v in result.columns}
+    return result.rename(columns=rename_map)
 
 
 def get_pitcher_start_game_ids(df: pd.DataFrame) -> set:

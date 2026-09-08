@@ -56,6 +56,98 @@ def inject_theme(accent: str = "#2f9bb5") -> None:
             border-right: 1px solid {BORDER};
         }}
 
+        /* ── Full-viewport background coverage ───────────────────────────────
+           .stApp's background-color only covers its own content height —
+           on a phone, especially on first load before everything renders,
+           or whenever the page/sidebar content is shorter than the actual
+           screen, that leaves a plain white/OS-default gap below the
+           themed area, which reads as "unfinished." 100dvh (dynamic
+           viewport height) is used ahead of 100vh specifically for mobile
+           browsers, where 100vh doesn't reliably account for the address
+           bar showing/hiding; vh is kept as the fallback for browsers that
+           don't support dvh yet. Applied to every layer that could
+           otherwise show through — the root html/body, Streamlit's own
+           app/view/main containers, the header bar, and the sidebar and
+           its inner content wrapper — so there's no gap at any level
+           regardless of how short the actual content is. */
+        html, body {{
+            background-color: {BG} !important;
+            min-height: 100vh;
+            min-height: 100dvh;
+        }}
+        [data-testid="stApp"], [data-testid="stAppViewContainer"], [data-testid="stMain"] {{
+            background-color: {BG} !important;
+            min-height: 100vh;
+            min-height: 100dvh;
+        }}
+        [data-testid="stHeader"] {{ background-color: {BG} !important; }}
+        section[data-testid="stSidebar"] {{
+            min-height: 100vh;
+            min-height: 100dvh;
+        }}
+        section[data-testid="stSidebar"] > div {{
+            background-color: {BG_SIDEBAR};
+            min-height: 100vh;
+            min-height: 100dvh;
+        }}
+
+        /* ── Header/content spacing ───────────────────────────────────────────
+           Two earlier attempts here fought .block-container's default
+           padding-top directly — once shrinking it (which made the header
+           cover the page title), once pairing a hardcoded header height
+           with a matching padding-top (which worked for that specific
+           sidebar-nav layout). Moving the nav to position="top" changes
+           what actually occupies that space — Streamlit now renders the
+           tab links there itself, and there's no reliable way to predict
+           the height that needs from this build environment. Rather than
+           guess a third time at a moving target, this now leaves both
+           the header height and .block-container's padding-top at
+           Streamlit's own defaults, trusting Streamlit to correctly size
+           its own supported top-nav layout — a well-supported, common
+           configuration, unlike guessing at an undocumented internal
+           value to match a customization this file was making itself. */
+
+        /* ── Replacing Streamlit's cycling running-icon with a plain loading
+           bar ──────────────────────────────────────────────────────────────
+           Streamlit's "Running" status indicator (stStatusWidget) cycles
+           through a handful of themed icons (a running-man figure, a New
+           Year's icon, and others) as a lighthearted touch — reported as
+           looking like a random sports-emoji cycle rather than a clear
+           "data is loading" signal. Hides that icon specifically (its
+           SVG, leaving any text label alone) and replaces it with a plain
+           animated bar across the very top of the viewport, shown only
+           while stStatusWidget is actually present — i.e. only during an
+           active run — via :has(), the same technique already used
+           elsewhere in this file for conditional rules.
+
+           Update: this turned out to always be visible rather than only
+           during an actual run — stStatusWidget appears to stay present
+           in the DOM regardless of run state (just empty/inactive when
+           idle), so :has() matched it unconditionally instead of only
+           while running, leaving a permanent, purposeless-looking bar
+           across the top of every page. Removed the conditional bar
+           entirely rather than guess at a different, equally unverified
+           detection method; kept only the icon-hiding rule, which is
+           simple, unconditional, and doesn't depend on correctly
+           detecting run state at all. A real, working progress
+           indicator for the specific slow operations (pulling a
+           player's games) now uses st.progress() directly in the
+           affected pages instead — a documented, stable public API
+           rather than another guess about Streamlit's internal DOM. */
+        div[data-testid="stStatusWidget"] svg {{ display: none !important; }}
+
+        /* ── Charts vs. page scroll on touch devices ─────────────────────────
+           Plotly's default touch handling treats a drag anywhere on the
+           chart as a pan/zoom gesture, which can hijack what was meant as
+           an ordinary scroll swipe if it starts or passes over a chart.
+           touch-action: pan-y tells the browser itself — before any
+           JavaScript even runs — that vertical drags on this element
+           should always be treated as normal page scrolling; only
+           horizontal drags and pinch gestures are left for Plotly to
+           handle. Taps (for hover/tooltips) are unaffected either way,
+           since a tap isn't a pan gesture. */
+        div[data-testid="stPlotlyChart"] {{ touch-action: pan-y !important; }}
+
         /* Metric tiles — plain typography, no box/border/left-bar. A thin
            bottom rule separates rows the way a stat table would. */
         div[data-testid="stMetric"] {{
@@ -105,36 +197,29 @@ def inject_theme(accent: str = "#2f9bb5") -> None:
         }}
         .stDataFrame {{ border-radius: 6px; overflow: hidden; }}
 
-        /* ── Sidebar page navigation (Batter/Pitcher/Team Dashboard links) ──
-           Streamlit renders these fairly small and plain by default, with
-           the same weight as everything else in the sidebar — not obviously
-           "the thing that switches pages." Bigger, bolder, with a clear
-           accent-colored left border on the current page. Also trims the
-           default vertical padding above/below the nav block itself, which
-           was most of the "dead space at the top of the sidebar."
-
-           No border-bottom / large margin below it anymore — that visible
-           dividing line plus the space around it was reported as taking
-           up too much room for what it's doing; a small margin is enough
-           of a visual break from the search controls below it. */
-        div[data-testid="stSidebarNav"] {{
-            padding-top: 0.25rem !important;
-            padding-bottom: 0.15rem !important;
-            margin-bottom: 0.2rem;
-        }}
-        div[data-testid="stSidebarNav"] a[data-testid="stSidebarNavLink"] {{
-            font-size: 16px !important;
+        /* ── Top navigation (Batter/Pitcher/Team), styled as tabs ────────────
+           Moved from the sidebar to position="top" so it reads as primary
+           page navigation rather than living alongside each page's own
+           search controls. Confirmed directly against this Streamlit
+           version's compiled frontend that stTopNavLink uses the exact
+           same aria-current="page" logic as the sidebar version did, so
+           the same active-page detection carries over unchanged — only
+           the base selector (stTopNavLink instead of stSidebarNavLink)
+           needed to change. Styled with an underline on the active tab
+           rather than the sidebar version's left border, since a
+           horizontal tab row conventionally indicates "current" along its
+           bottom edge, not its side. */
+        a[data-testid="stTopNavLink"] {{
+            font-size: 15px !important;
             font-weight: 600 !important;
-            padding: 10px 12px !important;
-            border-radius: 6px;
-            border-left: 3px solid transparent;
+            padding: 10px 16px !important;
+            border-bottom: 3px solid transparent;
+            border-radius: 0;
         }}
-        div[data-testid="stSidebarNav"] a[data-testid="stSidebarNavLink"][aria-current="page"] {{
-            background-color: {accent}22 !important;
-            border-left: 3px solid {accent};
+        a[data-testid="stTopNavLink"][aria-current="page"] {{
+            border-bottom: 3px solid {accent};
             color: {TEXT_PRIMARY} !important;
         }}
-        section[data-testid="stSidebar"] > div {{ padding-top: 0.5rem !important; }}
 
         /* ── Mobile (phone-width screens) ──────────────────────────────────
            Streamlit's st.columns() never reflows on its own — a 6-column

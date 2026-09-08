@@ -103,9 +103,15 @@ with st.sidebar:
 # ── Load on click ─────────────────────────────────────────────────────────────
 if load_clicked and selected_row is not None:
     status = st.empty()
+    bar = st.empty()
 
     def progress(msg):
         status.info(msg)
+        bar.empty()
+
+    def game_progress(completed, total):
+        status.info(f"Pulling pitch-by-pitch data — {completed} of {total} games…")
+        bar.progress(completed / total if total else 0)
 
     df = data_layer.get_pitcher_pitch_log(
         player_id=int(selected_row["player_id"]),
@@ -114,8 +120,10 @@ if load_clicked and selected_row is not None:
         sport_id=int(selected_row["sport_id"]),
         force_refresh=force_refresh,
         progress_callback=progress,
+        game_progress_callback=game_progress,
     )
     status.empty()
+    bar.empty()
 
     if not df.empty:
         df = data_layer.attach_home_away(df, int(season), int(selected_row["sport_id"]),
@@ -437,9 +445,27 @@ with tab_contact:
         b7.metric("PU%", f"{bb_profile_summary['pu_pct']*100:.0f}%" if pd.notna(bb_profile_summary["pu_pct"]) else "—")
 
 with tab_trend:
-    roll_window = st.slider("Rolling window (PA)", min_value=10, max_value=75, value=25, step=5)
-    trend_df = stats_pitching.compute_pitcher_rolling_trend(df_period, window=roll_window)
-    st.plotly_chart(charts_pitching.rolling_trend_pitcher_chart(trend_df, roll_window), width='stretch')
+    trend_col1, trend_col2 = st.columns([1, 2])
+    with trend_col1:
+        roll_window = st.slider("Rolling window (PA)", min_value=10, max_value=75, value=25, step=5)
+    with trend_col2:
+        selected_trend_stats = st.multiselect(
+            "Stats to show (up to 3)", stats_pitching.PITCHER_TREND_STAT_OPTIONS,
+            default=["AVG Against", "Whiff% Induced"], max_selections=3, key="pit_trend_stats",
+        )
+    if selected_trend_stats:
+        trend_df = stats_pitching.compute_pitcher_multi_rolling_trend(
+            df_period, window=roll_window, stat_names=selected_trend_stats
+        )
+        st.plotly_chart(
+            charts.multi_rolling_trend_chart(
+                trend_df, selected_trend_stats, roll_window,
+                format_map=stats_pitching.PITCHER_TREND_STAT_FORMAT,
+            ),
+            width='stretch',
+        )
+    else:
+        st.info("Pick at least one stat above to see a trend.")
 
 with tab_splits:
     splits = stats_pitching.compute_pitcher_splits(df_period)

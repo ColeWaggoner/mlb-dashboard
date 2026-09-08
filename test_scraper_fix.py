@@ -139,7 +139,7 @@ class _FakeGameDataDF:
 
 
 data_layer.scraper.get_player_games_list = lambda **kwargs: [500, 501, 501, 502]  # 501 duplicated
-data_layer.scraper.get_data = lambda game_list_input: game_list_input
+data_layer.scraper.get_data = lambda game_list_input, game_progress_callback=None: game_list_input
 data_layer.scraper.get_data_df = lambda data_list: _FakeGameDataDF(data_list)
 
 dup_test_df = data_layer.get_batter_pitch_log(

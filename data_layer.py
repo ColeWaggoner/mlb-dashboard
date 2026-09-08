@@ -183,6 +183,7 @@ def get_batter_pitch_log(
     sport_id: int,
     force_refresh: bool = False,
     progress_callback=None,
+    game_progress_callback=None,
 ) -> pd.DataFrame:
     """
     Pulls every pitch/plate-appearance event for one batter this season, using
@@ -190,6 +191,13 @@ def get_batter_pitch_log(
     player's own game list instead of a full team schedule (much less data to
     pull per look-up). Cached to disk indefinitely per (player, season, level);
     use force_refresh=True to re-pull (e.g. after new games have been played).
+
+    progress_callback(msg: str): occasional text status updates (unchanged).
+    game_progress_callback(completed: int, total: int): called after each
+    individual game finishes downloading, for a real, incrementally-updating
+    progress bar — see MLB_Scrape.get_data's own docstring for why this
+    exists (the tqdm progress bar in that method renders to the terminal via
+    stdout, which a web UI never sees).
     """
     cache_file = _pitch_cache_path(player_id, season, sport_id)
     if cache_file.exists() and not force_refresh:
@@ -210,7 +218,7 @@ def get_batter_pitch_log(
     if progress_callback:
         progress_callback(f"Pulling pitch-by-pitch data for {len(game_ids)} games…")
 
-    game_data = scraper.get_data(game_list_input=game_ids)
+    game_data = scraper.get_data(game_list_input=game_ids, game_progress_callback=game_progress_callback)
 
     if progress_callback:
         progress_callback("Converting to a table…")
@@ -1195,6 +1203,7 @@ def get_team_pitch_log(
     sport_id: int,
     force_refresh: bool = False,
     progress_callback=None,
+    game_progress_callback=None,
 ) -> pd.DataFrame:
     """Full-season pitch-by-pitch log for every game a team played, both
     sides of the ball at once (a game's feed always has that team batting AND
@@ -1207,6 +1216,11 @@ def get_team_pitch_log(
 
     Filter the result on batter_team_id == team_id for the team's hitting
     log, or pitcher_team_id == team_id for its pitching log.
+
+    progress_callback(msg: str): occasional text status updates (unchanged).
+    game_progress_callback(completed: int, total: int): called after each
+    individual game finishes downloading — see get_batter_pitch_log's
+    docstring for why this exists as a second, separate callback.
     """
     cache_file = _team_pitch_cache_path(team_id, season, sport_id)
     if cache_file.exists() and not force_refresh:
@@ -1235,7 +1249,7 @@ def get_team_pitch_log(
             "for one team, so it can take a few minutes…"
         )
 
-    game_data = scraper.get_data(game_list_input=game_ids)
+    game_data = scraper.get_data(game_list_input=game_ids, game_progress_callback=game_progress_callback)
 
     if progress_callback:
         progress_callback("Converting to a table…")
@@ -1263,9 +1277,15 @@ def get_pitcher_pitch_log(
     sport_id: int,
     force_refresh: bool = False,
     progress_callback=None,
+    game_progress_callback=None,
 ) -> pd.DataFrame:
     """Every pitch a pitcher has thrown this season, scoped to their own game
-    list (mirrors get_batter_pitch_log, filtered on pitcher_id instead)."""
+    list (mirrors get_batter_pitch_log, filtered on pitcher_id instead).
+
+    progress_callback(msg: str): occasional text status updates (unchanged).
+    game_progress_callback(completed: int, total: int): called after each
+    individual game finishes downloading — see get_batter_pitch_log's
+    docstring for why this exists as a second, separate callback."""
     cache_file = _pitcher_cache_path(player_id, season, sport_id)
     if cache_file.exists() and not force_refresh:
         return pd.read_parquet(cache_file)
@@ -1285,7 +1305,7 @@ def get_pitcher_pitch_log(
     if progress_callback:
         progress_callback(f"Pulling pitch-by-pitch data for {len(game_ids)} games…")
 
-    game_data = scraper.get_data(game_list_input=game_ids)
+    game_data = scraper.get_data(game_list_input=game_ids, game_progress_callback=game_progress_callback)
 
     if progress_callback:
         progress_callback("Converting to a table…")

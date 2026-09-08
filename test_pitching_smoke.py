@@ -190,4 +190,25 @@ _ = charts_pitching.release_point_chart(empty)
 _ = charts_pitching.rolling_trend_pitcher_chart(stats_pitching.compute_pitcher_rolling_trend(empty), 25)
 print("EMPTY DF EDGE CASES OK")
 
+# ── compute_pitcher_multi_rolling_trend: cross-check against the underlying
+# generic engine directly, proving the label translation doesn't change any
+# values, only the column names ────────────────────────────────────────────
+_selected_pitcher_labels = ["AVG Against", "Whiff% Induced", "Hard-Hit% Against", "Avg Exit Velo Against"]
+_selected_base_names = ["AVG", "Whiff%", "Hard-Hit%", "Avg Exit Velo"]
+_pitcher_trend = stats_pitching.compute_pitcher_multi_rolling_trend(df, window=25, stat_names=_selected_pitcher_labels)
+_base_trend = stats.compute_multi_rolling_trend(df, window=25, stat_names=_selected_base_names)
+assert list(_pitcher_trend.columns) == ["game_date"] + _selected_pitcher_labels
+for _label, _base in zip(_selected_pitcher_labels, _selected_base_names):
+    pd.testing.assert_series_equal(
+        _pitcher_trend[_label].reset_index(drop=True), _base_trend[_base].reset_index(drop=True), check_names=False
+    )
+print("compute_pitcher_multi_rolling_trend: exactly matches the underlying generic engine, correctly relabeled")
+
+_pitcher_chart = charts.multi_rolling_trend_chart(
+    _pitcher_trend, _selected_pitcher_labels, window=25, format_map=stats_pitching.PITCHER_TREND_STAT_FORMAT
+)
+assert len(_pitcher_chart.data) == len(_selected_pitcher_labels)
+assert "%{y:.1f} mph" in _pitcher_chart.data[3].hovertemplate  # Avg Exit Velo Against
+print("Pitcher-framed multi_rolling_trend_chart: renders correctly with the pitcher format map")
+
 print("\nALL PITCHING SMOKE TESTS PASSED")
